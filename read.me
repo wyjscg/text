@@ -1,2 +1,98 @@
+   pub async fn authenticate_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<AuthenticatorResponse>, AuthError> {
+        // 解析 token
+        let (token_id, token_secret) = match bootstrap_token_util::parse_token(token) {
+            Ok(parts) => parts,
+            Err(_) => {
+                // Token 格式不正确，忽略它
+                return Ok(None);
+            }
+        };
 
-1111
+        // 构造 secret 名称
+        let secret_name = format!("{}{}", bootstrap_api::BOOTSTRAP_TOKEN_SECRET_PREFIX, token_id);
+
+        // 获取 secret
+        let secret = match self.secret_api.get(&secret_name).await {
+            Ok(s) => s,
+            Err(kube::Error::Api(response)) if response.code == 404 => {
+                log::info!("No secret of name {} to match bootstrap bearer token", secret_name);
+                return Ok(None);
+            }
+            Err(e) => return Err(AuthError::KubeError(e)),
+        };
+
+        // 检查 secret 是否正在被删除
+        if secret.metadata.deletion_timestamp.is_some() {
+            Self::token_error(&secret, "is deleted and awaiting removal");
+            return Ok(None);
+        }
+
+        // 检查 secret 类型
+        if secret.type_.as_deref() != Some(bootstrap_api::SECRET_TYPE_BOOTSTRAP_TOKEN) 
+            || secret.data.is_none() {
+            Self::token_error(
+                &secret,
+                &format!("has invalid type, expected {}.", bootstrap_api::SECRET_TYPE_BOOTSTRAP_TOKEN)
+            );
+            return Ok(None);
+        }
+
+        // 验证 token secret（使用恒定时间比较防止时序攻击）
+        let ts = bootstrap_secret_util::get_data(&secret, bootstrap_api::BOOTSTRAP_TOKEN_SECRET_KEY);
+        if !Self::constant_time_compare(&ts, &token_secret) {
+            Self::token_error(
+                &secret,
+                &format!("has invalid value for key {}.", bootstrap_api::BOOTSTRAP_TOKEN_SECRET_KEY)
+            );
+            return Ok(None);
+        }
+
+        // 验证 token ID
+        let id = bootstrap_secret_util::get_data(&secret, bootstrap_api::BOOTSTRAP_TOKEN_ID_KEY);
+        if id != token_id {
+            Self::token_error(
+                &secret,
+                &format!("has invalid value for key {}.", bootstrap_api::BOOTSTRAP_TOKEN_ID_KEY)
+            );
+            return Ok(None);
+        }
+
+        // 检查是否过期
+        if bootstrap_secret_util::has_expired(&secret, Utc::now()) {
+            return Ok(None);
+        }
+
+        // 检查是否标记为可用于认证
+        let usage = bootstrap_secret_util::get_data(&secret, bootstrap_api::BOOTSTRAP_TOKEN_USAGE_AUTHENTICATION);
+        if usage != "true" {
+            Self::token_error(
+                &secret,
+                &format!("not marked {}=true.", bootstrap_api::BOOTSTRAP_TOKEN_USAGE_AUTHENTICATION)
+            );
+            return Ok(None);
+        }
+
+        // 获取用户组
+        let groups = match bootstrap_secret_util::get_groups(&secret) {
+            Ok(g) => g,
+            Err(e) => {
+                Self::token_error(
+                    &secret,
+                    &format!("has invalid value for key {}: {}.", 
+                        bootstrap_api::BOOTSTRAP_TOKEN_EXTRA_GROUPS_KEY, e)
+                );
+                return Ok(None);
+            }
+        };
+
+        // 构造认证响应
+        Ok(Some(AuthenticatorResponse {
+            user: UserInfo {
+                name: format!("{}{}", bootstrap_api::BOOTSTRAP_USER_PREFIX, id),
+                groups,
+            },
+        }))
+    }
