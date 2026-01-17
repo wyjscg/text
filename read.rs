@@ -1,4 +1,45 @@
+secret
+use k8s_openapi::api::core::v1::Secret;
+use kube::api::{Api, ListParams};
+use kube::Client;
 
+// SecretNamespaceLister 帮助列出和获取 Secrets。
+// 此处返回的所有对象必须被视为只读。
+pub struct SecretNamespaceLister {
+    api: Api<Secret>,
+}
+
+impl SecretNamespaceLister {
+    pub fn new(client: Client, namespace: &str) -> Self {
+        Self {
+            api: Api::namespaced(client, namespace),
+        }
+    }
+
+    // List 列出给定命名空间的索引器中的所有 Secrets。
+    // 此处返回的对象必须被视为只读。
+    pub async fn list(&self, selector: &str) -> Result<Vec<Secret>, kube::Error> {
+        let lp = if selector.is_empty() {
+            ListParams::default()
+        } else {
+            ListParams::default().labels(selector)
+        };
+        
+        let secret_list = self.api.list(&lp).await?;
+        Ok(secret_list.items)
+    }
+
+    // Get 从给定命名空间和名称的索引器中检索 Secret。
+    // 此处返回的对象必须被视为只读。
+    pub async fn get(&self, name: &str) -> Result<Secret, kube::Error> {
+        self.api.get(name).await
+    }
+}
+
+
+
+
+---------------------
 labels
 // Labels 允许你独立于其存储方式来呈现标签。
 pub trait Labels {
