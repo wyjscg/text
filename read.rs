@@ -5,35 +5,44 @@ fn is_not_found(err: &dyn std::error::Error) -> bool {
     if reason == metav1::StatusReason::NotFound {
         return true;
     }
-    if !KNOWN_REASONS.contains_key(&reason) && code == http::StatusCode::NOT_FOUND {
+    if !KNOWN_REASONS.contains_key(&reason) && code == http::StatusCode::NOT_FOUND.as_u16() as i32 {
         return true;
     }
     false
 }
 
-fn as_error<T>(err: &dyn std::error::Error, target: &mut Option<&T>) -> bool 
-where
-    T: std::error::Error + 'static,
-{
-    if let Some(downcasted) = err.downcast_ref::<T>() {
-        *target = Some(downcasted);
-        return true;
+fn reason_and_code_for_error(err: &dyn std::error::Error) -> (metav1::StatusReason, i32) {
+    if let Some(status) = err.downcast_ref::<dyn APIStatus>() {
+        return (status.status().reason, status.status().code);
     }
     
-    // 递归检查源错误
-    if let Some(source) = err.source() {
-        return as_error(source, target);
-    }
-    
-    false
-}
-
-fn reason_for_error(err: &dyn std::error::Error) -> metav1::StatusReason {
-    let mut status: Option<&dyn APIStatus> = None;
-    if as_error(err, &mut status) {
-        if let Some(s) = status {
-            return s.status().reason;
+    // 尝试从错误链中查找 APIStatus
+    let mut source = err.source();
+    while let Some(e) = source {
+        if let Some(status) = e.downcast_ref::<dyn APIStatus>() {
+            return (status.status().reason, status.status().code);
         }
+        source = e.source();
     }
-    metav1::StatusReason::Unknown
+    
+    (metav1::StatusReason::Unknown, 0)
+}
+
+fn as_error<T: 'static>(err: &dyn std::error::Error, target: &mut &dyn std::any::Any) -> bool {
+    if let Some(downcasted) = err.downcast_ref::<T>() {
+        *target = downcasted;
+        return true;
+    }
+    
+    // 递归检查错误链
+    let mut source = err.source();
+    while let Some(e) = source {
+        if let Some(downcasted) = e.downcast_ref::<T>() {
+            *target = downcasted;
+            return true;
+        }
+        source = e.source();
+    }
+    
+    false
 }
