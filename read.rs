@@ -1,25 +1,39 @@
-pub mod bootstraptokenutil {
-    use regex::Regex;
-    use once_cell::sync::Lazy;
+// IsNotFound 如果指定的错误是由 NewNotFound 创建的，则返回 true。
+// 它支持包装的错误，当错误为 nil 时返回 false。
+fn is_not_found(err: &dyn std::error::Error) -> bool {
+    let (reason, code) = reason_and_code_for_error(err);
+    if reason == metav1::StatusReason::NotFound {
+        return true;
+    }
+    if !KNOWN_REASONS.contains_key(&reason) && code == http::StatusCode::NOT_FOUND {
+        return true;
+    }
+    false
+}
 
-    // 使用 Lazy 实现延迟初始化的静态正则表达式
-    static BOOTSTRAP_TOKEN_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"^([a-z0-9]{6})\.([a-z0-9]{16})$").unwrap()
-    });
+fn as_error<T>(err: &dyn std::error::Error, target: &mut Option<&T>) -> bool 
+where
+    T: std::error::Error + 'static,
+{
+    if let Some(downcasted) = err.downcast_ref::<T>() {
+        *target = Some(downcasted);
+        return true;
+    }
+    
+    // 递归检查源错误
+    if let Some(source) = err.source() {
+        return as_error(source, target);
+    }
+    
+    false
+}
 
-    // ParseToken 尝试从字符串中解析一个有效的 token。
-    // 成功时返回 token ID 和 token secret，否则返回错误。
-    pub fn parse_token(s: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
-        let captures = BOOTSTRAP_TOKEN_RE.captures(s);
-        match captures {
-            Some(caps) if caps.len() == 3 => {
-                let token_id = caps.get(1).unwrap().as_str().to_string();
-                let token_secret = caps.get(2).unwrap().as_str().to_string();
-                Ok((token_id, token_secret))
-            }
-            _ => {
-                Err(format!("token [{}] was not of form [{}]", s, api::BOOTSTRAP_TOKEN_PATTERN).into())
-            }
+fn reason_for_error(err: &dyn std::error::Error) -> metav1::StatusReason {
+    let mut status: Option<&dyn APIStatus> = None;
+    if as_error(err, &mut status) {
+        if let Some(s) = status {
+            return s.status().reason;
         }
     }
+    metav1::StatusReason::Unknown
 }
