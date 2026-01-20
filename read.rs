@@ -1,98 +1,73 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-enum VertexType {
-    ConfigMap = 0,
-    Slice = 1,
-    Node = 2,
-    Pod = 3,
-    Pvc = 4,
-    Pv = 5,
-    ResourceClaim = 6,
-    Secret = 7,
-    Va = 8,
-    ServiceAccount = 9,
-    Pcr = 10,
+pub trait Node {
+    fn id(&self) -> i64;
 }
 
-fn vertex_types_str(vertex_type: VertexType) -> &'static str {
-    match vertex_type {
-        VertexType::ConfigMap => "configmap",
-        VertexType::Slice => "resourceslice",
-        VertexType::Node => "node",
-        VertexType::Pod => "pod",
-        VertexType::Pvc => "pvc",
-        VertexType::Pv => "pv",
-        VertexType::ResourceClaim => "resourceclaim",
-        VertexType::Secret => "secret",
-        VertexType::Va => "volumeattachment",
-        VertexType::ServiceAccount => "serviceAccount",
-        VertexType::Pcr => "podcertificaterequest",
+pub trait Edge {
+    fn from(&self) -> &dyn Node;
+    fn to(&self) -> &dyn Node;
+    fn weight(&self) -> f64;
+}
+
+pub trait Graph {
+    fn has(&self, node: &dyn Node) -> bool;
+
+    fn nodes(&self) -> Vec<Box<dyn Node>>;
+
+    fn from(&self, node: &dyn Node) -> Vec<Box<dyn Node>>;
+
+    fn has_edge_between(&self, x: &dyn Node, y: &dyn Node) -> bool;
+
+    fn edge(&self, u: &dyn Node, v: &dyn Node) -> Option<Box<dyn Edge>>;
+}
+
+pub trait Undirected: Graph {
+    fn edge_between(&self, x: &dyn Node, y: &dyn Node) -> Option<Box<dyn Edge>>;
+}
+
+pub trait Directed: Graph {
+    fn has_edge_from_to(&self, u: &dyn Node, v: &dyn Node) -> bool;
+
+    fn to(&self, node: &dyn Node) -> Vec<Box<dyn Node>>;
+}
+
+pub trait Weighter {
+    fn weight(&self, x: &dyn Node, y: &dyn Node) -> Option<f64>;
+}
+
+pub trait NodeAdder {
+    fn new_node_id(&mut self) -> i64;
+
+    fn add_node(&mut self, node: Box<dyn Node>);
+}
+
+pub trait NodeRemover {
+    fn remove_node(&mut self, node: &dyn Node);
+}
+
+pub trait EdgeSetter {
+    fn set_edge(&mut self, e: Box<dyn Edge>);
+}
+
+pub trait EdgeRemover {
+    fn remove_edge(&mut self, edge: &dyn Edge);
+}
+
+pub trait Builder: NodeAdder + EdgeSetter {}
+
+pub trait UndirectedBuilder: Undirected + Builder {}
+
+pub trait DirectedBuilder: Directed + Builder {}
+
+pub fn copy<B: Builder + Graph>(dst: &mut B, src: &dyn Graph) {
+    let nodes = src.nodes();
+    for n in &nodes {
+        dst.add_node(n.clone());
     }
-}
-
-struct NamedVertex {
-    name: String,
-    namespace: String,
-    id: i64,
-    vertex_type: VertexType,
-}
-
-impl NamedVertex {
-    fn new(vertex_type: VertexType, namespace: String, name: String, id: i64) -> Self {
-        NamedVertex {
-            vertex_type,
-            name,
-            namespace,
-            id,
+    for u in &nodes {
+        for v in src.from(&**u) {
+            if let Some(edge) = src.edge(&**u, &*v) {
+                dst.set_edge(edge);
+            }
         }
-    }
-
-    fn id(&self) -> i64 {
-        self.id
-    }
-
-    fn to_string(&self) -> String {
-        if self.namespace.is_empty() {
-            format!("{}:{}", vertex_types_str(self.vertex_type), self.name)
-        } else {
-            format!(
-                "{}:{}/{}",
-                vertex_types_str(self.vertex_type),
-                self.namespace,
-                self.name
-            )
-        }
-    }
-}
-
-struct DestinationEdge {
-    f: Box<dyn Node>,
-    t: Box<dyn Node>,
-    destination: Box<dyn Node>,
-}
-
-impl DestinationEdge {
-    fn new(from: Box<dyn Node>, to: Box<dyn Node>, destination: Box<dyn Node>) -> Self {
-        DestinationEdge {
-            f: from,
-            t: to,
-            destination,
-        }
-    }
-
-    fn from(&self) -> &dyn Node {
-        &*self.f
-    }
-
-    fn to(&self) -> &dyn Node {
-        &*self.t
-    }
-
-    fn weight(&self) -> f64 {
-        0.0
-    }
-
-    fn destination_id(&self) -> i64 {
-        self.destination.id()
     }
 }
