@@ -1,3 +1,35 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+enum VertexType {
+    ConfigMap = 0,
+    Slice = 1,
+    Node = 2,
+    Pod = 3,
+    Pvc = 4,
+    Pv = 5,
+    ResourceClaim = 6,
+    Secret = 7,
+    Va = 8,
+    ServiceAccount = 9,
+    Pcr = 10,
+}
+
+fn vertex_types_str(vertex_type: VertexType) -> &'static str {
+    match vertex_type {
+        VertexType::ConfigMap => "configmap",
+        VertexType::Slice => "resourceslice",
+        VertexType::Node => "node",
+        VertexType::Pod => "pod",
+        VertexType::Pvc => "pvc",
+        VertexType::Pv => "pv",
+        VertexType::ResourceClaim => "resourceclaim",
+        VertexType::Secret => "secret",
+        VertexType::Va => "volumeattachment",
+        VertexType::ServiceAccount => "serviceAccount",
+        VertexType::Pcr => "podcertificaterequest",
+    }
+}
+
 struct NamedVertex {
     name: String,
     namespace: String,
