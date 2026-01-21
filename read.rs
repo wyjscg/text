@@ -1,148 +1,92 @@
-use std::collections::HashMap;
+use std::mem;
 
-pub trait EdgeHolder {
-    fn visit<F>(&self, visitor: F)
-    where
-        F: FnMut(i64, &dyn Edge);
-    
-    fn delete(self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder>;
-    
-    fn set(self: Box<Self>, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder>;
-    
-    fn get(&self, neighbor: i64) -> Option<&dyn Edge>;
-    
-    fn len(&self) -> usize;
+pub struct Sparse {
+    root: Block,
 }
 
-pub struct SliceEdgeHolder {
-    self_id: i64,
-    edges: Vec<Box<dyn Edge>>,
+type Word = usize;
+
+const BITS_PER_WORD: usize = mem::size_of::<Word>() * 8;
+const BITS_PER_BLOCK: usize = 256;
+const WORDS_PER_BLOCK: usize = BITS_PER_BLOCK / BITS_PER_WORD;
+
+struct Block {
+    offset: i64,
+    bits: [Word; WORDS_PER_BLOCK],
+    next: Option<*mut Block>,
+    prev: Option<*mut Block>,
 }
 
-impl SliceEdgeHolder {
-    pub fn new(self_id: i64) -> Self {
-        SliceEdgeHolder {
-            self_id,
-            edges: Vec::new(),
+static mut NONE: Block = Block {
+    offset: 0,
+    bits: [0; WORDS_PER_BLOCK],
+    next: None,
+    prev: None,
+};
+
+impl Sparse {
+    pub fn len(&self) -> usize {
+        let mut l = 0;
+        let mut b = self.first();
+        while !std::ptr::eq(b, unsafe { &NONE }) {
+            l += b.len();
+            b = self.next(b);
+        }
+        l
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn first(&self) -> &Block {
+        self.init();
+        if self.root.offset == i64::MAX {
+            unsafe { &NONE }
+        } else {
+            &self.root
+        }
+    }
+
+    fn init(&self) {
+        let root = unsafe { &mut *((&self.root) as *const Block as *mut Block) };
+        if root.next.is_none() {
+            root.offset = i64::MAX;
+            root.next = Some(root as *mut Block);
+            root.prev = Some(root as *mut Block);
+        } else if let Some(next_ptr) = root.next {
+            let next = unsafe { &*next_ptr };
+            if let Some(next_prev) = next.prev {
+                if !std::ptr::eq(next_prev, root) {
+                    panic!("to copy a Sparse you must call its Copy method");
+                }
+            }
+        }
+    }
+
+    fn next(&self, b: &Block) -> &Block {
+        if let Some(next_ptr) = b.next {
+            if std::ptr::eq(next_ptr, &self.root as *const Block) {
+                unsafe { &NONE }
+            } else {
+                unsafe { &*next_ptr }
+            }
+        } else {
+            unsafe { &NONE }
         }
     }
 }
 
-impl EdgeHolder for SliceEdgeHolder {
-    fn visit<F>(&self, mut visitor: F)
-    where
-        F: FnMut(i64, &dyn Edge),
-    {
-        for edge in &self.edges {
-            if edge.from().id() == self.self_id {
-                visitor(edge.to().id(), edge.as_ref());
-            } else {
-                visitor(edge.from().id(), edge.as_ref());
-            }
-        }
-    }
-
-    fn delete(mut self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder> {
-        self.edges.retain(|edge| {
-            if edge.from().id() == self.self_id {
-                edge.to().id() != neighbor
-            } else {
-                edge.from().id() != neighbor
-            }
-        });
-        self
-    }
-
-    fn set(mut self: Box<Self>, neighbor: i64, new_edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
-        for i in 0..self.edges.len() {
-            let edge = &self.edges[i];
-            if edge.from().id() == self.self_id {
-                if edge.to().id() == neighbor {
-                    self.edges[i] = new_edge;
-                    return self;
-                }
-            } else {
-                if edge.from().id() == neighbor {
-                    self.edges[i] = new_edge;
-                    return self;
-                }
-            }
-        }
-
-        if self.edges.len() < 4 {
-            self.edges.push(new_edge);
-            return self;
-        }
-
-        let mut map = HashMap::with_capacity(self.edges.len() + 1);
-        for edge in self.edges {
-            if edge.from().id() == self.self_id {
-                map.insert(edge.to().id(), edge);
-            } else {
-                map.insert(edge.from().id(), edge);
-            }
-        }
-        map.insert(neighbor, new_edge);
-        Box::new(MapEdgeHolder { edges: map })
-    }
-
-    fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
-        for edge in &self.edges {
-            if edge.from().id() == self.self_id {
-                if edge.to().id() == neighbor {
-                    return Some(edge.as_ref());
-                }
-            } else {
-                if edge.from().id() == neighbor {
-                    return Some(edge.as_ref());
-                }
-            }
-        }
-        None
-    }
-
+impl Block {
     fn len(&self) -> usize {
-        self.edges.len()
-    }
-}
-
-pub struct MapEdgeHolder {
-    edges: HashMap<i64, Box<dyn Edge>>,
-}
-
-impl MapEdgeHolder {
-    pub fn new() -> Self {
-        MapEdgeHolder {
-            edges: HashMap::new(),
+        let mut l = 0;
+        for &w in &self.bits {
+            l += popcount(w);
         }
+        l
     }
 }
 
-impl EdgeHolder for MapEdgeHolder {
-    fn visit<F>(&self, mut visitor: F)
-    where
-        F: FnMut(i64, &dyn Edge),
-    {
-        for (&neighbor, edge) in &self.edges {
-            visitor(neighbor, edge.as_ref());
-        }
-    }
-
-    fn delete(mut self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder> {
-        self.edges.remove(&neighbor);
-        self
-    }
-
-    fn set(mut self: Box<Self>, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
-        self.edges.insert(neighbor, edge);
-        self
-    }
-
-    fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
-        self.edges.get(&neighbor).map(|e| e.as_ref())
-    }
-
-    fn len(&self) -> usize {
-        self.edges.len()
-    }
+fn popcount(x: Word) -> usize {
+    x.count_ones() as usize
 }
