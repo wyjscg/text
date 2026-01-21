@@ -1,41 +1,101 @@
 use std::collections::HashMap;
 
-pub struct IntSet {
-    members: HashMap<i32, i32>,
-}
-
-impl IntSet {
-    pub fn new() -> Self {
-        IntSet {
-            members: HashMap::new(),
+impl Graph {
+    fn get_or_create_vertex_locked(
+        &mut self,
+        vertex_type: VertexType,
+        namespace: String,
+        name: String,
+    ) -> &mut NamedVertex {
+        if self.get_vertex_rlocked(&vertex_type, &namespace, &name).is_some() {
+            return self.vertices
+                .get_mut(&vertex_type)
+                .unwrap()
+                .get_mut(&namespace)
+                .unwrap()
+                .get_mut(&name)
+                .unwrap();
         }
+        self.create_vertex_locked(vertex_type, namespace, name)
     }
 
-    pub fn has(&self, i: i32) -> bool {
-        self.members.get(&i).map_or(false, |&count| count > 0)
+    fn get_vertex_rlocked(
+        &self,
+        vertex_type: &VertexType,
+        namespace: &str,
+        name: &str,
+    ) -> Option<&NamedVertex> {
+        self.vertices
+            .get(vertex_type)?
+            .get(namespace)?
+            .get(name)
     }
 
-    pub fn reset(&mut self) {
-        self.members.clear();
+    fn create_vertex_locked(
+        &mut self,
+        vertex_type: VertexType,
+        namespace: String,
+        name: String,
+    ) -> &mut NamedVertex {
+        let typed_vertices = self.vertices
+            .entry(vertex_type.clone())
+            .or_insert_with(HashMap::new);
+
+        let namespaced_vertices = typed_vertices
+            .entry(namespace.clone())
+            .or_insert_with(HashMap::new);
+
+        let node_id = self.graph.new_node_id();
+        let vertex = NamedVertex::new(vertex_type.clone(), namespace.clone(), name.clone(), node_id);
+        
+        self.graph.add_node(Box::new(vertex.clone()));
+        namespaced_vertices.insert(name.clone(), vertex);
+        
+        namespaced_vertices.get_mut(&name).unwrap()
     }
 
-    pub fn increment(&mut self, i: i32) {
-        *self.members.entry(i).or_insert(0) += 1;
-    }
+    fn delete_vertex_locked(
+        &mut self,
+        vertex_type: VertexType,
+        namespace: String,
+        name: String,
+    ) {
+        let vertex = match self.get_vertex_rlocked(&vertex_type, &namespace, &name) {
+            Some(v) => v.clone(),
+            None => return,
+        };
 
-    pub fn decrement(&mut self, i: i32) {
-        if let Some(count) = self.members.get_mut(&i) {
-            if *count <= 1 {
-                self.members.remove(&i);
+        let mut neighbors_to_remove = Vec::new();
+        let mut edges_to_remove_from_indexes = Vec::new();
+
+        self.graph.visit_from(&vertex, |neighbor| {
+            if self.graph.degree(neighbor) == 1 {
+                neighbors_to_remove.push(neighbor.clone());
+            }
+            true
+        });
+
+        self.graph.visit_to(&vertex, |neighbor| {
+            if self.graph.degree(neighbor) == 1 {
+                neighbors_to_remove.push(neighbor.clone());
             } else {
-                *count -= 1;
+                if let Some(edge) = self.graph.edge_between(&vertex, neighbor) {
+                    edges_to_remove_from_indexes.push(edge.clone());
+                }
+            }
+            true
+        });
+
+        self.remove_vertex_locked(&vertex);
+
+        for neighbor in neighbors_to_remove {
+            if let Some(named_vertex) = neighbor.downcast_ref::<NamedVertex>() {
+                self.remove_vertex_locked(named_vertex);
             }
         }
-    }
-}
 
-impl Default for IntSet {
-    fn default() -> Self {
-        Self::new()
+        for edge in edges_to_remove_from_indexes {
+            self.remove_edge_from_destination_index_locked(&edge);
+        }
     }
 }
