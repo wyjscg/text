@@ -1,251 +1,190 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-const MAX_INT: i64 = i64::MAX;
-
-pub struct UndirectedGraph {
-    nodes: HashMap<i64, Box<dyn Node>>,
-    edges: HashMap<i64, Box<dyn EdgeHolder>>,
-    self_weight: f64,
-    absent: f64,
-    free_ids: IntSet,
-    used_ids: IntSet,
+pub trait EdgeHolder {
+    fn visit<F>(&self, visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge);
+    
+    fn delete(&self, neighbor: i64) -> Box<dyn EdgeHolder>;
+    
+    fn set(&self, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder>;
+    
+    fn get(&self, neighbor: i64) -> Option<Box<dyn Edge>>;
+    
+    fn len(&self) -> usize;
+    
+    fn get_neighbors(&self) -> Vec<i64>;
 }
 
-impl UndirectedGraph {
-    pub fn new(self_weight: f64, absent: f64) -> Self {
-        UndirectedGraph {
-            nodes: HashMap::new(),
-            edges: HashMap::new(),
-            self_weight,
-            absent,
-            free_ids: IntSet::new(),
-            used_ids: IntSet::new(),
+pub struct SliceEdgeHolder {
+    self_id: i64,
+    edges: Vec<Box<dyn Edge>>,
+}
+
+impl SliceEdgeHolder {
+    pub fn new(self_id: i64) -> Self {
+        SliceEdgeHolder {
+            self_id,
+            edges: Vec::new(),
         }
     }
+}
 
-    pub fn new_node_id(&mut self) -> i64 {
-        if self.nodes.is_empty() {
-            return 0;
-        }
-        if self.nodes.len() == MAX_INT as usize {
-            panic!("simple: cannot allocate node: no slot");
-        }
-
-        if self.free_ids.len() != 0 {
-            if let Some(id) = self.free_ids.take_min() {
-                return id;
+impl EdgeHolder for SliceEdgeHolder {
+    fn visit<F>(&self, mut visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge),
+    {
+        for edge in &self.edges {
+            if edge.from().id() == self.self_id {
+                visitor(edge.to().id(), &**edge);
+            } else {
+                visitor(edge.from().id(), &**edge);
             }
         }
-
-        let max_id = self.used_ids.max();
-        if max_id < MAX_INT {
-            return max_id + 1;
-        }
-
-        for id in 0..MAX_INT {
-            if !self.used_ids.has(id) {
-                return id;
-            }
-        }
-        panic!("unreachable")
     }
 
-    pub fn add_node(&mut self, n: Box<dyn Node>) {
-        let id = n.id();
-        if self.nodes.contains_key(&id) {
-            panic!("simple: node ID collision: {}", id);
-        }
-        self.nodes.insert(id, n);
-        self.edges.insert(id, Box::new(SliceEdgeHolder::new(id)));
-
-        self.free_ids.remove(id);
-        self.used_ids.insert(id);
-    }
-
-    pub fn remove_node(&mut self, n: &dyn Node) {
-        let id = n.id();
-        if !self.nodes.contains_key(&id) {
-            return;
-        }
-        self.nodes.remove(&id);
-
-        if let Some(edge_holder) = self.edges.get(&id) {
-            let neighbors: Vec<i64> = edge_holder.get_neighbors();
-            for neighbor in neighbors {
-                if let Some(neighbor_holder) = self.edges.get_mut(&neighbor) {
-                    *neighbor_holder = neighbor_holder.delete(id);
-                }
-            }
-        }
-        self.edges.remove(&id);
-
-        self.free_ids.insert(id);
-        self.used_ids.remove(id);
-    }
-
-    pub fn set_edge(&mut self, e: Box<dyn Edge>) {
-        let from = e.from();
-        let fid = from.id();
-        let to = e.to();
-        let tid = to.id();
-
-        if fid == tid {
-            panic!("simple: adding self edge");
-        }
-
-        if !self.has(from) {
-            self.add_node(from.clone_box());
-        }
-        if !self.has(to) {
-            self.add_node(to.clone_box());
-        }
-
-        if let Some(holder) = self.edges.get(&fid) {
-            self.edges.insert(fid, holder.set(tid, e.clone_box()));
-        }
-        if let Some(holder) = self.edges.get(&tid) {
-            self.edges.insert(tid, holder.set(fid, e));
-        }
-    }
-
-    pub fn remove_edge(&mut self, e: &dyn Edge) {
-        let from = e.from();
-        let to = e.to();
-        let fid = from.id();
-        let tid = to.id();
-
-        if !self.nodes.contains_key(&fid) {
-            return;
-        }
-        if !self.nodes.contains_key(&tid) {
-            return;
-        }
-
-        if let Some(holder) = self.edges.get(&fid) {
-            self.edges.insert(fid, holder.delete(tid));
-        }
-        if let Some(holder) = self.edges.get(&tid) {
-            self.edges.insert(tid, holder.delete(fid));
-        }
-    }
-
-    pub fn node(&self, id: i64) -> Option<&dyn Node> {
-        self.nodes.get(&id).map(|n| &**n)
-    }
-
-    pub fn has(&self, n: &dyn Node) -> bool {
-        self.nodes.contains_key(&n.id())
-    }
-
-    pub fn nodes(&self) -> Vec<Box<dyn Node>> {
-        self.nodes.values().map(|n| n.clone_box()).collect()
-    }
-
-    pub fn edges(&self) -> Vec<Box<dyn Edge>> {
+    fn delete(&self, neighbor: i64) -> Box<dyn EdgeHolder> {
         let mut edges = Vec::new();
-        let mut seen: HashSet<(i64, i64)> = HashSet::new();
-
-        for holder in self.edges.values() {
-            holder.visit(|neighbor, e| {
-                let uid = e.from().id();
-                let vid = e.to().id();
-                if seen.contains(&(uid, vid)) {
-                    return;
-                }
-                seen.insert((uid, vid));
-                seen.insert((vid, uid));
-                edges.push(e.clone_box());
-            });
+        for edge in &self.edges {
+            let should_keep = if edge.from().id() == self.self_id {
+                edge.to().id() != neighbor
+            } else {
+                edge.from().id() != neighbor
+            };
+            
+            if should_keep {
+                edges.push(edge.clone_box());
+            }
         }
-
-        edges
+        
+        Box::new(SliceEdgeHolder {
+            self_id: self.self_id,
+            edges,
+        })
     }
 
-    pub fn from(&self, n: &dyn Node) -> Vec<Box<dyn Node>> {
-        if !self.has(n) {
-            return Vec::new();
-        }
-
-        let mut nodes = Vec::new();
-        if let Some(holder) = self.edges.get(&n.id()) {
-            holder.visit(|neighbor, _edge| {
-                if let Some(node) = self.nodes.get(&neighbor) {
-                    nodes.push(node.clone_box());
-                }
-            });
-        }
-
-        nodes
-    }
-
-    pub fn has_edge_between(&self, x: &dyn Node, y: &dyn Node) -> bool {
-        if let Some(holder) = self.edges.get(&x.id()) {
-            holder.get(y.id()).is_some()
-        } else {
-            false
-        }
-    }
-
-    pub fn edge(&self, u: &dyn Node, v: &dyn Node) -> Option<Box<dyn Edge>> {
-        self.edge_between(u, v)
-    }
-
-    pub fn edge_between(&self, x: &dyn Node, y: &dyn Node) -> Option<Box<dyn Edge>> {
-        if !self.has(x) {
-            return None;
-        }
-
-        if let Some(holder) = self.edges.get(&x.id()) {
-            holder.get(y.id())
-        } else {
-            None
-        }
-    }
-
-    pub fn weight(&self, x: &dyn Node, y: &dyn Node) -> (f64, bool) {
-        let xid = x.id();
-        let yid = y.id();
-
-        if xid == yid {
-            return (self.self_weight, true);
-        }
-
-        if let Some(holder) = self.edges.get(&xid) {
-            if let Some(e) = holder.get(yid) {
-                return (e.weight(), true);
+    fn set(&self, neighbor: i64, new_edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
+        let mut edges = self.edges.clone();
+        
+        for i in 0..edges.len() {
+            let edge = &edges[i];
+            let matches = if edge.from().id() == self.self_id {
+                edge.to().id() == neighbor
+            } else {
+                edge.from().id() == neighbor
+            };
+            
+            if matches {
+                edges[i] = new_edge;
+                return Box::new(SliceEdgeHolder {
+                    self_id: self.self_id,
+                    edges,
+                });
             }
         }
 
-        (self.absent, false)
-    }
-
-    pub fn degree(&self, n: &dyn Node) -> usize {
-        if !self.nodes.contains_key(&n.id()) {
-            return 0;
+        if edges.len() < 4 {
+            edges.push(new_edge);
+            return Box::new(SliceEdgeHolder {
+                self_id: self.self_id,
+                edges,
+            });
         }
 
-        self.edges.get(&n.id()).map_or(0, |holder| holder.len())
+        let mut map = HashMap::with_capacity(edges.len() + 1);
+        for edge in &edges {
+            let key = if edge.from().id() == self.self_id {
+                edge.to().id()
+            } else {
+                edge.from().id()
+            };
+            map.insert(key, edge.clone_box());
+        }
+        map.insert(neighbor, new_edge);
+        Box::new(MapEdgeHolder(map))
+    }
+
+    fn get(&self, neighbor: i64) -> Option<Box<dyn Edge>> {
+        for edge in &self.edges {
+            let matches = if edge.from().id() == self.self_id {
+                edge.to().id() == neighbor
+            } else {
+                edge.from().id() == neighbor
+            };
+            
+            if matches {
+                return Some(edge.clone_box());
+            }
+        }
+        None
+    }
+
+    fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    fn get_neighbors(&self) -> Vec<i64> {
+        self.edges
+            .iter()
+            .map(|edge| {
+                if edge.from().id() == self.self_id {
+                    edge.to().id()
+                } else {
+                    edge.from().id()
+                }
+            })
+            .collect()
     }
 }
 
-impl Graph for UndirectedGraph {
-    fn has(&self, node: &dyn Node) -> bool {
-        self.has(node)
+pub struct MapEdgeHolder(HashMap<i64, Box<dyn Edge>>);
+
+impl EdgeHolder for MapEdgeHolder {
+    fn visit<F>(&self, mut visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge),
+    {
+        for (neighbor, edge) in &self.0 {
+            visitor(*neighbor, &**edge);
+        }
     }
 
-    fn nodes(&self) -> Vec<Box<dyn Node>> {
-        self.nodes()
+    fn delete(&self, neighbor: i64) -> Box<dyn EdgeHolder> {
+        let mut map = self.0.clone();
+        map.remove(&neighbor);
+        Box::new(MapEdgeHolder(map))
     }
 
-    fn from(&self, node: &dyn Node) -> Vec<Box<dyn Node>> {
-        self.from(node)
+    fn set(&self, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
+        let mut map = self.0.clone();
+        map.insert(neighbor, edge);
+        Box::new(MapEdgeHolder(map))
     }
 
-    fn has_edge_between(&self, x: &dyn Node, y: &dyn Node) -> bool {
-        self.has_edge_between(x, y)
+    fn get(&self, neighbor: i64) -> Option<Box<dyn Edge>> {
+        self.0.get(&neighbor).map(|e| e.clone_box())
     }
 
-    fn edge(&self, u: &dyn Node, v: &dyn Node) -> Option<Box<dyn Edge>> {
-        self.edge(u, v)
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn get_neighbors(&self) -> Vec<i64> {
+        self.0.keys().copied().collect()
+    }
+}
+
+impl Clone for Vec<Box<dyn Edge>> {
+    fn clone(&self) -> Self {
+        self.iter().map(|e| e.clone_box()).collect()
+    }
+}
+
+impl Clone for HashMap<i64, Box<dyn Edge>> {
+    fn clone(&self) -> Self {
+        self.iter()
+            .map(|(k, v)| (*k, v.clone_box()))
+            .collect()
     }
 }
