@@ -3,24 +3,24 @@ use std::collections::HashMap;
 pub trait EdgeHolder {
     fn visit<F>(&self, visitor: F)
     where
-        F: FnMut(i32, &dyn Edge);
+        F: FnMut(i64, &dyn Edge);
     
-    fn delete(self: Box<Self>, neighbor: i32) -> Box<dyn EdgeHolder>;
+    fn delete(self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder>;
     
-    fn set(self: Box<Self>, neighbor: i32, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder>;
+    fn set(self: Box<Self>, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder>;
     
-    fn get(&self, neighbor: i32) -> Option<&dyn Edge>;
+    fn get(&self, neighbor: i64) -> Option<&dyn Edge>;
     
     fn len(&self) -> usize;
 }
 
 pub struct SliceEdgeHolder {
-    self_id: i32,
+    self_id: i64,
     edges: Vec<Box<dyn Edge>>,
 }
 
 impl SliceEdgeHolder {
-    pub fn new(self_id: i32) -> Self {
+    pub fn new(self_id: i64) -> Self {
         SliceEdgeHolder {
             self_id,
             edges: Vec::new(),
@@ -31,7 +31,7 @@ impl SliceEdgeHolder {
 impl EdgeHolder for SliceEdgeHolder {
     fn visit<F>(&self, mut visitor: F)
     where
-        F: FnMut(i32, &dyn Edge),
+        F: FnMut(i64, &dyn Edge),
     {
         for edge in &self.edges {
             if edge.from().id() == self.self_id {
@@ -42,7 +42,7 @@ impl EdgeHolder for SliceEdgeHolder {
         }
     }
 
-    fn delete(mut self: Box<Self>, neighbor: i32) -> Box<dyn EdgeHolder> {
+    fn delete(mut self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder> {
         self.edges.retain(|edge| {
             if edge.from().id() == self.self_id {
                 edge.to().id() != neighbor
@@ -53,7 +53,7 @@ impl EdgeHolder for SliceEdgeHolder {
         self
     }
 
-    fn set(mut self: Box<Self>, neighbor: i32, new_edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
+    fn set(mut self: Box<Self>, neighbor: i64, new_edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
         for i in 0..self.edges.len() {
             let edge = &self.edges[i];
             if edge.from().id() == self.self_id {
@@ -86,7 +86,7 @@ impl EdgeHolder for SliceEdgeHolder {
         Box::new(MapEdgeHolder { edges: map })
     }
 
-    fn get(&self, neighbor: i32) -> Option<&dyn Edge> {
+    fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
         for edge in &self.edges {
             if edge.from().id() == self.self_id {
                 if edge.to().id() == neighbor {
@@ -107,7 +107,7 @@ impl EdgeHolder for SliceEdgeHolder {
 }
 
 pub struct MapEdgeHolder {
-    edges: HashMap<i32, Box<dyn Edge>>,
+    edges: HashMap<i64, Box<dyn Edge>>,
 }
 
 impl MapEdgeHolder {
@@ -121,24 +121,24 @@ impl MapEdgeHolder {
 impl EdgeHolder for MapEdgeHolder {
     fn visit<F>(&self, mut visitor: F)
     where
-        F: FnMut(i32, &dyn Edge),
+        F: FnMut(i64, &dyn Edge),
     {
         for (&neighbor, edge) in &self.edges {
             visitor(neighbor, edge.as_ref());
         }
     }
 
-    fn delete(mut self: Box<Self>, neighbor: i32) -> Box<dyn EdgeHolder> {
+    fn delete(mut self: Box<Self>, neighbor: i64) -> Box<dyn EdgeHolder> {
         self.edges.remove(&neighbor);
         self
     }
 
-    fn set(mut self: Box<Self>, neighbor: i32, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
+    fn set(mut self: Box<Self>, neighbor: i64, edge: Box<dyn Edge>) -> Box<dyn EdgeHolder> {
         self.edges.insert(neighbor, edge);
         self
     }
 
-    fn get(&self, neighbor: i32) -> Option<&dyn Edge> {
+    fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
         self.edges.get(&neighbor).map(|e| e.as_ref())
     }
 
