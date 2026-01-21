@@ -36,7 +36,26 @@ impl Sparse {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.root.next.is_none() || self.root.offset == i64::MAX
+    }
+
+    pub fn take_min(&mut self, p: &mut i64) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        *p = self.root.min(true);
+        if self.root.empty() {
+            let root_ptr = &mut self.root as *mut Block;
+            self.remove_block(root_ptr);
+        }
+        true
+    }
+
+    pub fn clear(&mut self) {
+        let root_ptr = &mut self.root as *mut Block;
+        self.root.offset = i64::MAX;
+        self.root.next = Some(root_ptr);
+        self.root.prev = Some(root_ptr);
     }
 
     fn first(&self) -> &Block {
@@ -75,6 +94,49 @@ impl Sparse {
             unsafe { &NONE }
         }
     }
+
+    fn remove_block(&mut self, b: *mut Block) -> *const Block {
+        let root_ptr = &mut self.root as *mut Block;
+        
+        if !std::ptr::eq(b, root_ptr) {
+            unsafe {
+                let block = &mut *b;
+                let prev = &mut *block.prev.unwrap();
+                let next = &mut *block.next.unwrap();
+                
+                prev.next = Some(next as *mut Block);
+                next.prev = Some(prev as *mut Block);
+                
+                if std::ptr::eq(next as *const Block, root_ptr) {
+                    return &NONE as *const Block;
+                }
+                return next as *const Block;
+            }
+        }
+
+        let first_ptr = self.root.next.unwrap();
+        
+        if std::ptr::eq(first_ptr, root_ptr) {
+            self.clear();
+            return unsafe { &NONE as *const Block };
+        }
+
+        let first = unsafe { &mut *first_ptr };
+        self.root.offset = first.offset;
+        self.root.bits = first.bits;
+
+        if let Some(first_next) = first.next {
+            if std::ptr::eq(first_next, root_ptr) {
+                self.root.next = Some(root_ptr);
+                self.root.prev = Some(root_ptr);
+            } else {
+                self.root.next = Some(first_next);
+                unsafe { (*first_next).prev = Some(root_ptr) };
+            }
+        }
+        
+        root_ptr as *const Block
+    }
 }
 
 impl Block {
@@ -85,8 +147,35 @@ impl Block {
         }
         l
     }
+
+    fn min(&mut self, take: bool) -> i64 {
+        for i in 0..self.bits.len() {
+            let w = self.bits[i];
+            if w != 0 {
+                let tz = ntz(w);
+                if take {
+                    self.bits[i] = w & !(1 << tz);
+                }
+                return self.offset + (i * BITS_PER_WORD) as i64 + tz as i64;
+            }
+        }
+        panic!("BUG: empty block")
+    }
+
+    fn empty(&self) -> bool {
+        for &w in &self.bits {
+            if w != 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 fn popcount(x: Word) -> usize {
     x.count_ones() as usize
+}
+
+fn ntz(x: Word) -> usize {
+    x.trailing_zeros() as usize
 }
