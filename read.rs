@@ -1,73 +1,45 @@
-pub trait Node {
-    fn id(&self) -> i64;
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+pub struct Graph {
+    lock: RwLock<GraphInner>,
 }
 
-pub trait Edge {
-    fn from(&self) -> &dyn Node;
-    fn to(&self) -> &dyn Node;
-    fn weight(&self) -> f64;
+struct GraphInner {
+    graph: DirectedAcyclicGraph,
+    vertices: HashMap<VertexType, NamespaceVertexMapping>,
+    destination_edge_index: HashMap<i64, IntSet>,
+    destination_edge_threshold: usize,
 }
 
-pub trait Graph {
-    fn has(&self, node: &dyn Node) -> bool;
+type NamespaceVertexMapping = HashMap<String, NameVertexMapping>;
 
-    fn nodes(&self) -> Vec<Box<dyn Node>>;
+type NameVertexMapping = HashMap<String, Box<NamedVertex>>;
 
-    fn from(&self, node: &dyn Node) -> Vec<Box<dyn Node>>;
-
-    fn has_edge_between(&self, x: &dyn Node, y: &dyn Node) -> bool;
-
-    fn edge(&self, u: &dyn Node, v: &dyn Node) -> Option<Box<dyn Edge>>;
-}
-
-pub trait Undirected: Graph {
-    fn edge_between(&self, x: &dyn Node, y: &dyn Node) -> Option<Box<dyn Edge>>;
-}
-
-pub trait Directed: Graph {
-    fn has_edge_from_to(&self, u: &dyn Node, v: &dyn Node) -> bool;
-
-    fn to(&self, node: &dyn Node) -> Vec<Box<dyn Node>>;
-}
-
-pub trait Weighter {
-    fn weight(&self, x: &dyn Node, y: &dyn Node) -> Option<f64>;
-}
-
-pub trait NodeAdder {
-    fn new_node_id(&mut self) -> i64;
-
-    fn add_node(&mut self, node: Box<dyn Node>);
-}
-
-pub trait NodeRemover {
-    fn remove_node(&mut self, node: &dyn Node);
-}
-
-pub trait EdgeSetter {
-    fn set_edge(&mut self, e: Box<dyn Edge>);
-}
-
-pub trait EdgeRemover {
-    fn remove_edge(&mut self, edge: &dyn Edge);
-}
-
-pub trait Builder: NodeAdder + EdgeSetter {}
-
-pub trait UndirectedBuilder: Undirected + Builder {}
-
-pub trait DirectedBuilder: Directed + Builder {}
-
-pub fn copy<B: Builder + Graph>(dst: &mut B, src: &dyn Graph) {
-    let nodes = src.nodes();
-    for n in &nodes {
-        dst.add_node(n.clone());
-    }
-    for u in &nodes {
-        for v in src.from(&**u) {
-            if let Some(edge) = src.edge(&**u, &*v) {
-                dst.set_edge(edge);
-            }
+impl Graph {
+    pub fn new() -> Self {
+        Graph {
+            lock: RwLock::new(GraphInner {
+                vertices: HashMap::new(),
+                graph: DirectedAcyclicGraph::new(0, 0),
+                destination_edge_index: HashMap::new(),
+                destination_edge_threshold: 200,
+            }),
         }
     }
+}
+
+lazy_static::lazy_static! {
+    static ref VERTEX_TYPE_WITH_AUTHORITATIVE_INDEX: HashMap<VertexType, bool> = {
+        let mut m = HashMap::new();
+        m.insert(VertexType::ConfigMap, true);
+        m.insert(VertexType::Slice, true);
+        m.insert(VertexType::Pod, true);
+        m.insert(VertexType::Pvc, true);
+        m.insert(VertexType::ResourceClaim, true);
+        m.insert(VertexType::Va, true);
+        m.insert(VertexType::ServiceAccount, true);
+        m.insert(VertexType::Pcr, true);
+        m
+    };
 }
