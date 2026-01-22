@@ -1,0 +1,31 @@
+use std::sync::Once;
+use prometheus::{HistogramVec, HistogramOpts, Registry};
+
+const NODE_AUTHORIZER_SUBSYSTEM: &str = "node_authorizer";
+
+lazy_static::lazy_static! {
+    static ref GRAPH_ACTIONS_DURATION: HistogramVec = {
+        let opts = HistogramOpts::new(
+            "graph_actions_duration_seconds",
+            "Histogram of duration of graph actions in node authorizer."
+        )
+        .subsystem(NODE_AUTHORIZER_SUBSYSTEM)
+        .buckets(vec![
+            0.0001, 0.0002, 0.0004, 0.0008, 0.0016, 0.0032,
+            0.0064, 0.0128, 0.0256, 0.0512, 0.1024, 0.2048
+        ]);
+        
+        HistogramVec::new(opts, &["operation"])
+            .expect("Failed to create graph_actions_duration histogram")
+    };
+}
+
+static REGISTER_METRICS: Once = Once::new();
+
+pub fn register_metrics() {
+    REGISTER_METRICS.call_once(|| {
+        prometheus::default_registry()
+            .register(Box::new(GRAPH_ACTIONS_DURATION.clone()))
+            .expect("Failed to register graph_actions_duration metric");
+    });
+}
