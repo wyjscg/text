@@ -1,47 +1,65 @@
-use std::f64;
+use serde::{Deserialize, Serialize};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1 as metav1;
+use k8s_openapi::apimachinery::pkg::types;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Node(pub i32);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodCertificateRequest {
+    #[serde(flatten)]
+    pub type_meta: metav1::TypeMeta,
 
-impl Node {
-    pub fn id(&self) -> i32 {
-        self.0
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<metav1::ObjectMeta>,
+
+    pub spec: PodCertificateRequestSpec,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<PodCertificateRequestStatus>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Edge {
-    pub from: Box<dyn GraphNode>,
-    pub to: Box<dyn GraphNode>,
-    pub weight: f64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodCertificateRequestSpec {
+    pub signer_name: String,
+
+    pub pod_name: String,
+
+    pub pod_uid: types::UID,
+
+    pub service_account_name: String,
+
+    pub service_account_uid: types::UID,
+
+    pub node_name: types::NodeName,
+
+    pub node_uid: types::UID,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_expiration_seconds: Option<i32>,
+
+    pub pkix_public_key: Vec<u8>,
+
+    pub proof_of_possession: Vec<u8>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unverified_user_annotations: Option<std::collections::HashMap<String, String>>,
 }
 
-impl Edge {
-    pub fn from(&self) -> &dyn GraphNode {
-        &*self.from
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodCertificateRequestStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<metav1::Condition>>,
 
-    pub fn to(&self) -> &dyn GraphNode {
-        &*self.to
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_chain: Option<String>,
 
-    pub fn weight(&self) -> f64 {
-        self.weight
-    }
-}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<metav1::Time>,
 
-pub trait GraphNode {
-    fn id(&self) -> i32;
-}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub begin_refresh_at: Option<metav1::Time>,
 
-impl GraphNode for Node {
-    fn id(&self) -> i32 {
-        self.0
-    }
-}
-
-pub const MAX_INT: i32 = i32::MAX;
-
-pub fn is_same(a: f64, b: f64) -> bool {
-    a == b || (a.is_nan() && b.is_nan())
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<metav1::Time>,
 }
