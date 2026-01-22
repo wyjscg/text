@@ -1,51 +1,255 @@
-pub const IMAGE_POLICY_FAILED_OPEN_KEY: &str = "alpha.image-policy.k8s.io/failed-open";
+use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, VolumeSource};
 
-pub const MIRROR_POD_ANNOTATION_KEY: &str = "kubernetes.io/config.mirror";
+type Visitor = Box<dyn Fn(&str) -> bool>;
 
-pub const TOLERATIONS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/tolerations";
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ContainerType(u8);
 
-pub const TAINTS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/taints";
+impl ContainerType {
+    pub const INIT_CONTAINERS: Self = Self(1);
+    pub const CONTAINERS: Self = Self(2);
+    pub const EPHEMERAL_CONTAINERS: Self = Self(4);
+    pub const ALL_CONTAINERS: Self = Self(7);
+}
 
-pub const SECCOMP_POD_ANNOTATION_KEY: &str = "seccomp.security.alpha.kubernetes.io/pod";
+impl std::ops::BitAnd for ContainerType {
+    type Output = Self;
+    
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
 
-pub const SECCOMP_CONTAINER_ANNOTATION_KEY_PREFIX: &str = "container.seccomp.security.alpha.kubernetes.io/";
+impl ContainerType {
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
 
-pub const SECCOMP_PROFILE_RUNTIME_DEFAULT: &str = "runtime/default";
+type ContainerVisitor = Box<dyn Fn(&Container, ContainerType) -> bool>;
 
-pub const SECCOMP_PROFILE_NAME_UNCONFINED: &str = "unconfined";
+pub fn visit_pod_secret_names(pod: &Pod, visitor: impl Fn(&str) -> bool + 'static) -> bool {
+    let visitor = skip_empty_names(Box::new(visitor));
+    
+    if let Some(spec) = &pod.spec {
+        if let Some(image_pull_secrets) = &spec.image_pull_secrets {
+            for reference in image_pull_secrets {
+                if let Some(name) = &reference.name {
+                    if !visitor(name) {
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        visit_containers(spec, ContainerType::ALL_CONTAINERS, Box::new(|c, _| {
+            visit_container_secret_names(c, &visitor)
+        }));
+        
+        if let Some(volumes) = &spec.volumes {
+            for volume in volumes {
+                if let Some(source) = &volume.volume_source {
+                    if !visit_volume_source_secrets(source, &visitor) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    
+    true
+}
 
-pub const SECCOMP_LOCALHOST_PROFILE_NAME_PREFIX: &str = "localhost/";
+fn skip_empty_names(visitor: Visitor) -> Visitor {
+    Box::new(move |name: &str| {
+        if name.is_empty() {
+            true
+        } else {
+            visitor(name)
+        }
+    })
+}
 
-pub const DEPRECATED_APP_ARMOR_BETA_CONTAINER_ANNOTATION_KEY_PREFIX: &str = "container.apparmor.security.beta.kubernetes.io/";
+fn visit_containers(pod_spec: &PodSpec, mask: ContainerType, visitor: ContainerVisitor) -> bool {
+    for (c, t) in container_iter(pod_spec, mask) {
+        if !visitor(c, t) {
+            return false;
+        }
+    }
+    true
+}
 
-pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_RUNTIME_DEFAULT: &str = "runtime/default";
+fn container_iter<'a>(
+    pod_spec: &'a PodSpec,
+    mask: ContainerType,
+) -> impl Iterator<Item = (&'a Container, ContainerType)> {
+    let init_containers = if (mask & ContainerType::INIT_CONTAINERS).is_empty() {
+        None
+    } else {
+        pod_spec.init_containers.as_ref().map(|containers| {
+            containers.iter().map(|c| (c, ContainerType::INIT_CONTAINERS))
+        })
+    };
+    
+    let containers = if (mask & ContainerType::CONTAINERS).is_empty() {
+        None
+    } else {
+        pod_spec.containers.iter().map(|c| (c, ContainerType::CONTAINERS))
+    };
+    
+    let ephemeral_containers = if (mask & ContainerType::EPHEMERAL_CONTAINERS).is_empty() {
+        None
+    } else {
+        pod_spec.ephemeral_containers.as_ref().map(|containers| {
+            containers.iter().map(|ec| {
+                (&ec.ephemeral_container_common, ContainerType::EPHEMERAL_CONTAINERS)
+            })
+        })
+    };
+    
+    init_containers
+        .into_iter()
+        .flatten()
+        .chain(containers)
+        .chain(ephemeral_containers.into_iter().flatten())
+}
 
-pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_NAME_PREFIX: &str = "localhost/";
+fn visit_container_secret_names(container: &Container, visitor: &Visitor) -> bool {
+    if let Some(env_from) = &container.env_from {
+        for env in env_from {
+            if let Some(secret_ref) = &env.secret_ref {
+                if let Some(name) = &secret_ref.name {
+                    if !visitor(name) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    
+    if let Some(env_vars) = &container.env {
+        for env_var in env_vars {
+            if let Some(value_from) = &env_var.value_from {
+                if let Some(secret_key_ref) = &value_from.secret_key_ref {
+                    if !visitor(&secret_key_ref.name) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    
+    true
+}
 
-pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_NAME_UNCONFINED: &str = "unconfined";
-
-pub const DEPRECATED_SECCOMP_PROFILE_DOCKER_DEFAULT: &str = "docker/default";
-
-pub const PREFER_AVOID_PODS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/preferAvoidPods";
-
-pub const OBJECT_TTL_ANNOTATION_KEY: &str = "node.alpha.kubernetes.io/ttl";
-
-pub const NON_CONVERTIBLE_ANNOTATION_PREFIX: &str = "non-convertible.kubernetes.io";
-
-const KUBECTL_PREFIX: &str = "kubectl.kubernetes.io/";
-
-pub const LAST_APPLIED_CONFIG_ANNOTATION: &str = "kubectl.kubernetes.io/last-applied-configuration";
-
-pub const ANNOTATION_LOAD_BALANCER_SOURCE_RANGES_KEY: &str = "service.beta.kubernetes.io/load-balancer-source-ranges";
-
-pub const ENDPOINTS_LAST_CHANGE_TRIGGER_TIME: &str = "endpoints.kubernetes.io/last-change-trigger-time";
-
-pub const ENDPOINTS_OVER_CAPACITY: &str = "endpoints.kubernetes.io/over-capacity";
-
-pub const MIGRATED_PLUGINS_ANNOTATION_KEY: &str = "storage.alpha.kubernetes.io/migrated-plugins";
-
-pub const POD_DELETION_COST: &str = "controller.kubernetes.io/pod-deletion-cost";
-
-pub const DEPRECATED_ANNOTATION_TOPOLOGY_AWARE_HINTS: &str = "service.kubernetes.io/topology-aware-hints";
-
-pub const ANNOTATION_TOPOLOGY_MODE: &str = "service.kubernetes.io/topology-mode";
+fn visit_volume_source_secrets(source: &VolumeSource, visitor: &Visitor) -> bool {
+    if let Some(azure_file) = &source.azure_file {
+        if !azure_file.secret_name.is_empty() && !visitor(&azure_file.secret_name) {
+            return false;
+        }
+    }
+    
+    if let Some(cephfs) = &source.cephfs {
+        if let Some(secret_ref) = &cephfs.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(cinder) = &source.cinder {
+        if let Some(secret_ref) = &cinder.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(flex_volume) = &source.flex_volume {
+        if let Some(secret_ref) = &flex_volume.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(projected) = &source.projected {
+        if let Some(sources) = &projected.sources {
+            for source in sources {
+                if let Some(secret) = &source.secret {
+                    if let Some(name) = &secret.name {
+                        if !visitor(name) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if let Some(rbd) = &source.rbd {
+        if let Some(secret_ref) = &rbd.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(secret) = &source.secret {
+        if let Some(secret_name) = &secret.secret_name {
+            if !visitor(secret_name) {
+                return false;
+            }
+        }
+    }
+    
+    if let Some(scale_io) = &source.scale_io {
+        if let Some(secret_ref) = &scale_io.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(iscsi) = &source.iscsi {
+        if let Some(secret_ref) = &iscsi.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(storageos) = &source.storageos {
+        if let Some(secret_ref) = &storageos.secret_ref {
+            if let Some(name) = &secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    if let Some(csi) = &source.csi {
+        if let Some(node_publish_secret_ref) = &csi.node_publish_secret_ref {
+            if let Some(name) = &node_publish_secret_ref.name {
+                if !visitor(name) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    true
+}
