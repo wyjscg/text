@@ -1,180 +1,208 @@
-use std::collections::HashMap;
+use std::time::Instant;
 
 impl Graph {
-    fn delete_edges_locked(
-        &mut self,
-        from_type: VertexType,
-        to_type: VertexType,
-        to_namespace: &str,
-        to_name: &str,
-    ) {
-        let to_vert = match self.get_vertex_r_locked(to_type, to_namespace, to_name) {
-            Some(v) => v,
-            None => return,
-        };
+    pub fn add_pod(&mut self, pod: &Pod) {
+        let start = Instant::now();
+        let _timer = scopeguard::guard((), |_| {
+            GRAPH_ACTIONS_DURATION
+                .with_label_values(&["AddPod"])
+                .observe(start.elapsed().as_secs_f64());
+        });
 
-        let mut neighbors_to_remove = Vec::new();
-        let mut edges_to_remove = Vec::new();
+        self.delete_vertex_locked(VertexType::Pod, &pod.namespace, &pod.name);
+        let pod_vertex = self.get_or_create_vertex_locked(
+            VertexType::Pod,
+            &pod.namespace,
+            &pod.name,
+        );
+        let node_vertex = self.get_or_create_vertex_locked(
+            VertexType::Node,
+            "",
+            &pod.spec.node_name,
+        );
+        self.add_edge_locked(Some(pod_vertex), Some(node_vertex), Some(node_vertex));
 
-        self.graph.visit_to(to_vert, |from| {
-            let from_vert = from.as_named_vertex();
-            if from_vert.vertex_type != from_type {
-                return true;
-            }
+        if pod.annotations.contains_key(MIRROR_POD_ANNOTATION_KEY) {
+            return;
+        }
 
-            if self.graph.degree(from_vert) == 1 {
-                neighbors_to_remove.push(from_vert.clone());
+        if !pod.spec.service_account_name.is_empty() {
+            let service_account_vertex = self.get_or_create_vertex_locked(
+                VertexType::ServiceAccount,
+                &pod.namespace,
+                &pod.spec.service_account_name,
+            );
+            self.add_edge_locked(
+                Some(service_account_vertex),
+                Some(pod_vertex),
+                Some(node_vertex),
+            );
+        }
+
+        visit_pod_secret_names(pod, |secret| {
+            let secret_vertex = self.get_or_create_vertex_locked(
+                VertexType::Secret,
+                &pod.namespace,
+                secret,
+            );
+            self.add_edge_locked(Some(secret_vertex), Some(pod_vertex), Some(node_vertex));
+            true
+        });
+
+        visit_pod_configmap_names(pod, |configmap| {
+            let configmap_vertex = self.get_or_create_vertex_locked(
+                VertexType::ConfigMap,
+                &pod.namespace,
+                configmap,
+            );
+            self.add_edge_locked(Some(configmap_vertex), Some(pod_vertex), Some(node_vertex));
+            true
+        });
+
+        for v in &pod.spec.volumes {
+            let claim_name = if let Some(pvc) = &v.persistent_volume_claim {
+                Some(pvc.claim_name.clone())
+            } else if let Some(ephemeral) = &v.ephemeral {
+                Some(ephemeral::volume_claim_name(pod, v))
             } else {
-                edges_to_remove.push(self.graph.edge_between(from, to_vert));
-            }
-            true
-        });
+                None
+            };
 
-        for v in neighbors_to_remove {
-            self.remove_vertex_locked(&v);
-        }
-
-        for edge in edges_to_remove {
-            self.graph.remove_edge(&edge);
-            self.remove_edge_from_destination_index_locked(&edge);
-        }
-    }
-
-    fn remove_edge_from_destination_index_locked(&mut self, e: &dyn Edge) {
-        let n = e.from();
-        let edge_count = self.graph.degree(n);
-
-        if edge_count < self.destination_edge_threshold {
-            self.destination_edge_index.remove(&n.id());
-            return;
-        }
-
-        if let Some(index) = self.destination_edge_index.get_mut(&n.id()) {
-            if let Some(destination_edge) = (e as &dyn std::any::Any).downcast_ref::<DestinationEdge>() {
-                index.decrement(destination_edge.destination_id());
-            }
-        }
-    }
-
-    fn add_edge_to_destination_index_locked(&mut self, e: &dyn Edge) {
-        let n = e.from();
-        let n_id = n.id();
-
-        if !self.destination_edge_index.contains_key(&n_id) {
-            self.recompute_destination_index_locked(n);
-            return;
-        }
-
-        if let Some(index) = self.destination_edge_index.get_mut(&n_id) {
-            if let Some(destination_edge) = (e as &dyn std::any::Any).downcast_ref::<DestinationEdge>() {
-                index.increment(destination_edge.destination_id());
-            }
-        }
-    }
-
-    fn remove_vertex_locked(&mut self, v: &NamedVertex) {
-        self.graph.remove_node(v);
-        self.destination_edge_index.remove(&v.id());
-
-        if let Some(namespace_map) = self.vertices.get_mut(&v.vertex_type) {
-            if let Some(name_map) = namespace_map.get_mut(&v.namespace) {
-                name_map.remove(&v.name);
-                if name_map.is_empty() {
-                    namespace_map.remove(&v.namespace);
+            if let Some(claim_name) = claim_name {
+                if !claim_name.is_empty() {
+                    let pvc_vertex = self.get_or_create_vertex_locked(
+                        VertexType::Pvc,
+                        &pod.namespace,
+                        &claim_name,
+                    );
+                    self.add_edge_locked(Some(pvc_vertex), Some(pod_vertex), Some(node_vertex));
                 }
             }
         }
+
+        for pod_resource_claim in &pod.spec.resource_claims {
+            if let Ok(Some(claim_name)) = resourceclaim::name(pod, pod_resource_claim) {
+                let claim_vertex = self.get_or_create_vertex_locked(
+                    VertexType::ResourceClaim,
+                    &pod.namespace,
+                    &claim_name,
+                );
+                self.add_edge_locked(Some(claim_vertex), Some(pod_vertex), Some(node_vertex));
+            }
+        }
+
+        if let Some(extended_status) = &pod.status.extended_resource_claim_status {
+            if !extended_status.resource_claim_name.is_empty() {
+                let claim_vertex = self.get_or_create_vertex_locked(
+                    VertexType::ResourceClaim,
+                    &pod.namespace,
+                    &extended_status.resource_claim_name,
+                );
+                self.add_edge_locked(Some(claim_vertex), Some(pod_vertex), Some(node_vertex));
+            }
+        }
     }
 
-    fn recompute_destination_index_locked(&mut self, n: &dyn Node) {
-        let edge_count = self.graph.degree(n);
-        let n_id = n.id();
+    fn add_edge_locked(
+        &mut self,
+        from: Option<&NamedVertex>,
+        to: Option<&NamedVertex>,
+        destination: Option<&NamedVertex>,
+    ) {
+        let from = from.expect("from vertex cannot be None");
+        let to = to.expect("to vertex cannot be None");
 
-        if edge_count < self.destination_edge_threshold {
-            self.destination_edge_index.remove(&n_id);
+        if let Some(dest) = destination {
+            let e = new_destination_edge(from, to, dest);
+            self.graph.set_edge(e.clone());
+            self.add_edge_to_destination_index_locked(&e);
             return;
         }
 
-        let index = self.destination_edge_index
-            .entry(n_id)
-            .or_insert_with(|| IntSet::new());
-        
-        if self.destination_edge_index.contains_key(&n_id) {
-            index.reset();
+        if VERTEX_TYPE_WITH_AUTHORITATIVE_INDEX.contains(&from.vertex_type) {
+            panic!(
+                "vertex of type {:?} must have destination edges only",
+                from.vertex_type
+            );
         }
-
-        self.graph.visit_from(n, |dest| {
-            if let Some(edge) = self.graph.edge_between(n, dest) {
-                if let Some(destination_edge) = (edge as &dyn std::any::Any).downcast_ref::<DestinationEdge>() {
-                    index.increment(destination_edge.destination_id());
-                }
-            }
-            true
+        self.graph.set_edge(SimpleEdge {
+            f: from.clone(),
+            t: to.clone(),
         });
     }
-}
 
-struct DestinationEdge {
-    f: Box<dyn Node>,
-    t: Box<dyn Node>,
-    destination: Box<dyn Node>,
-}
+    pub fn delete_pod(&mut self, name: &str, namespace: &str) {
+        let start = Instant::now();
+        let _timer = scopeguard::guard((), |_| {
+            GRAPH_ACTIONS_DURATION
+                .with_label_values(&["DeletePod"])
+                .observe(start.elapsed().as_secs_f64());
+        });
 
-impl DestinationEdge {
-    fn destination_id(&self) -> i32 {
-        self.destination.id()
+        self.delete_vertex_locked(VertexType::Pod, namespace, name);
     }
 }
 
-impl Edge for DestinationEdge {
+fn new_destination_edge(
+    from: &NamedVertex,
+    to: &NamedVertex,
+    destination: &NamedVertex,
+) -> DestinationEdge {
+    DestinationEdge {
+        f: Box::new(from.clone()),
+        t: Box::new(to.clone()),
+        destination: Box::new(destination.clone()),
+    }
+}
+
+#[derive(Clone)]
+struct SimpleEdge {
+    f: NamedVertex,
+    t: NamedVertex,
+}
+
+impl Edge for SimpleEdge {
     fn from(&self) -> &dyn Node {
-        self.f.as_ref()
+        &self.f
     }
 
     fn to(&self) -> &dyn Node {
-        self.t.as_ref()
+        &self.t
     }
 
     fn weight(&self) -> f64 {
-        0.0
+        1.0
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct NamedVertex {
-    name: String,
-    namespace: String,
-    id: i32,
-    vertex_type: VertexType,
-}
-
-impl Node for NamedVertex {
-    fn id(&self) -> i32 {
-        self.id
+fn visit_pod_secret_names<F>(pod: &Pod, mut f: F)
+where
+    F: FnMut(&str) -> bool,
+{
+    for secret in &pod.spec.secrets {
+        if !f(&secret.name) {
+            break;
+        }
     }
 }
 
-struct Graph {
-    graph: DirectedAcyclicGraph,
-    vertices: HashMap<VertexType, NamespaceVertexMapping>,
-    destination_edge_index: HashMap<i32, IntSet>,
-    destination_edge_threshold: usize,
+fn visit_pod_configmap_names<F>(pod: &Pod, mut f: F)
+where
+    F: FnMut(&str) -> bool,
+{
+    for configmap in &pod.spec.configmaps {
+        if !f(&configmap.name) {
+            break;
+        }
+    }
 }
 
-trait Node {
-    fn id(&self) -> i32;
-}
+const MIRROR_POD_ANNOTATION_KEY: &str = "kubernetes.io/config.mirror";
 
-trait Edge {
-    fn from(&self) -> &dyn Node;
-    fn to(&self) -> &dyn Node;
-    fn weight(&self) -> f64;
-}
-
-trait GraphTrait {
-    fn has(&self, node: &dyn Node) -> bool;
-    fn nodes(&self) -> Vec<&dyn Node>;
-    fn from(&self, node: &dyn Node) -> Vec<&dyn Node>;
-    fn has_edge_between(&self, x: &dyn Node, y: &dyn Node) -> bool;
-    fn edge(&self, u: &dyn Node, v: &dyn Node) -> Option<&dyn Edge>;
-}
+static VERTEX_TYPE_WITH_AUTHORITATIVE_INDEX: &[VertexType] = &[
+    VertexType::Secret,
+    VertexType::ConfigMap,
+    VertexType::Pvc,
+    VertexType::ServiceAccount,
+    VertexType::ResourceClaim,
+];
