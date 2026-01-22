@@ -1,31 +1,51 @@
-use std::sync::Once;
-use prometheus::{HistogramVec, HistogramOpts, Registry};
+pub const IMAGE_POLICY_FAILED_OPEN_KEY: &str = "alpha.image-policy.k8s.io/failed-open";
 
-const NODE_AUTHORIZER_SUBSYSTEM: &str = "node_authorizer";
+pub const MIRROR_POD_ANNOTATION_KEY: &str = "kubernetes.io/config.mirror";
 
-lazy_static::lazy_static! {
-    static ref GRAPH_ACTIONS_DURATION: HistogramVec = {
-        let opts = HistogramOpts::new(
-            "graph_actions_duration_seconds",
-            "Histogram of duration of graph actions in node authorizer."
-        )
-        .subsystem(NODE_AUTHORIZER_SUBSYSTEM)
-        .buckets(vec![
-            0.0001, 0.0002, 0.0004, 0.0008, 0.0016, 0.0032,
-            0.0064, 0.0128, 0.0256, 0.0512, 0.1024, 0.2048
-        ]);
-        
-        HistogramVec::new(opts, &["operation"])
-            .expect("Failed to create graph_actions_duration histogram")
-    };
-}
+pub const TOLERATIONS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/tolerations";
 
-static REGISTER_METRICS: Once = Once::new();
+pub const TAINTS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/taints";
 
-pub fn register_metrics() {
-    REGISTER_METRICS.call_once(|| {
-        prometheus::default_registry()
-            .register(Box::new(GRAPH_ACTIONS_DURATION.clone()))
-            .expect("Failed to register graph_actions_duration metric");
-    });
-}
+pub const SECCOMP_POD_ANNOTATION_KEY: &str = "seccomp.security.alpha.kubernetes.io/pod";
+
+pub const SECCOMP_CONTAINER_ANNOTATION_KEY_PREFIX: &str = "container.seccomp.security.alpha.kubernetes.io/";
+
+pub const SECCOMP_PROFILE_RUNTIME_DEFAULT: &str = "runtime/default";
+
+pub const SECCOMP_PROFILE_NAME_UNCONFINED: &str = "unconfined";
+
+pub const SECCOMP_LOCALHOST_PROFILE_NAME_PREFIX: &str = "localhost/";
+
+pub const DEPRECATED_APP_ARMOR_BETA_CONTAINER_ANNOTATION_KEY_PREFIX: &str = "container.apparmor.security.beta.kubernetes.io/";
+
+pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_RUNTIME_DEFAULT: &str = "runtime/default";
+
+pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_NAME_PREFIX: &str = "localhost/";
+
+pub const DEPRECATED_APP_ARMOR_BETA_PROFILE_NAME_UNCONFINED: &str = "unconfined";
+
+pub const DEPRECATED_SECCOMP_PROFILE_DOCKER_DEFAULT: &str = "docker/default";
+
+pub const PREFER_AVOID_PODS_ANNOTATION_KEY: &str = "scheduler.alpha.kubernetes.io/preferAvoidPods";
+
+pub const OBJECT_TTL_ANNOTATION_KEY: &str = "node.alpha.kubernetes.io/ttl";
+
+pub const NON_CONVERTIBLE_ANNOTATION_PREFIX: &str = "non-convertible.kubernetes.io";
+
+const KUBECTL_PREFIX: &str = "kubectl.kubernetes.io/";
+
+pub const LAST_APPLIED_CONFIG_ANNOTATION: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
+pub const ANNOTATION_LOAD_BALANCER_SOURCE_RANGES_KEY: &str = "service.beta.kubernetes.io/load-balancer-source-ranges";
+
+pub const ENDPOINTS_LAST_CHANGE_TRIGGER_TIME: &str = "endpoints.kubernetes.io/last-change-trigger-time";
+
+pub const ENDPOINTS_OVER_CAPACITY: &str = "endpoints.kubernetes.io/over-capacity";
+
+pub const MIGRATED_PLUGINS_ANNOTATION_KEY: &str = "storage.alpha.kubernetes.io/migrated-plugins";
+
+pub const POD_DELETION_COST: &str = "controller.kubernetes.io/pod-deletion-cost";
+
+pub const DEPRECATED_ANNOTATION_TOPOLOGY_AWARE_HINTS: &str = "service.kubernetes.io/topology-aware-hints";
+
+pub const ANNOTATION_TOPOLOGY_MODE: &str = "service.kubernetes.io/topology-mode";
