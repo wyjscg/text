@@ -1,32 +1,47 @@
-const ERR_CLAIM_NOT_FOUND: &str = "resource claim not found";
-const ERR_API_UNSUPPORTED: &str = "API unsupported";
+use std::f64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Node(pub i32);
 
-
-pub fn name(
-    pod: &v1::Pod,
-    pod_claim: &v1::PodResourceClaim,
-) -> Result<(Option<&str>, bool), String> {
-    match {
-        if pod_claim.resource_claim_name.is_some() => {
-            Ok((pod_claim.resource_claim_name.as_deref(), false))
-        }
-        if pod_claim.resource_claim_template_name.is_some() => {
-            for status in &pod.status.resource_claim_statuses {
-                if status.name == pod_claim.name {
-                    return Ok((status.resource_claim_name.as_deref(), true));
-                }
-            }
-            Err(format!(
-                r#"pod "{}/{}": {}"#,
-                pod.namespace, pod.name, ERR_CLAIM_NOT_FOUND
-            ))
-        }
-        _ => {
-            Err(format!(
-                r#"pod "{}/{}", spec.resourceClaim "{}": {}"#,
-                pod.namespace, pod.name, pod_claim.name, ERR_API_UNSUPPORTED
-            ))
-        }
+impl Node {
+    pub fn id(&self) -> i32 {
+        self.0
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub from: Box<dyn GraphNode>,
+    pub to: Box<dyn GraphNode>,
+    pub weight: f64,
+}
+
+impl Edge {
+    pub fn from(&self) -> &dyn GraphNode {
+        &*self.from
+    }
+
+    pub fn to(&self) -> &dyn GraphNode {
+        &*self.to
+    }
+
+    pub fn weight(&self) -> f64 {
+        self.weight
+    }
+}
+
+pub trait GraphNode {
+    fn id(&self) -> i32;
+}
+
+impl GraphNode for Node {
+    fn id(&self) -> i32 {
+        self.0
+    }
+}
+
+pub const MAX_INT: i32 = i32::MAX;
+
+pub fn is_same(a: f64, b: f64) -> bool {
+    a == b || (a.is_nan() && b.is_nan())
 }
