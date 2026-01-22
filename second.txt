@@ -1,75 +1,32 @@
-pub fn visit_pod_configmap_names(pod: &Pod, visitor: impl Fn(&str) -> bool + 'static) -> bool {
-    let visitor = skip_empty_names(Box::new(visitor));
-    
-    if let Some(spec) = &pod.spec {
-        visit_containers(spec, ContainerType::ALL_CONTAINERS, Box::new(|c, _| {
-            visit_container_configmap_names(c, &visitor)
-        }));
-        
-        if let Some(volumes) = &spec.volumes {
-            for volume in volumes {
-                if let Some(source) = &volume.volume_source {
-                    if !visit_volume_source_configmaps(source, &visitor) {
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-    
-    true
-}
+const ERR_CLAIM_NOT_FOUND: &str = "resource claim not found";
+const ERR_API_UNSUPPORTED: &str = "API unsupported";
 
-fn visit_container_configmap_names(container: &Container, visitor: &Visitor) -> bool {
-    if let Some(env_from) = &container.env_from {
-        for env in env_from {
-            if let Some(configmap_ref) = &env.config_map_ref {
-                if let Some(name) = &configmap_ref.name {
-                    if !visitor(name) {
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-    
-    if let Some(env_vars) = &container.env {
-        for env_var in env_vars {
-            if let Some(value_from) = &env_var.value_from {
-                if let Some(configmap_key_ref) = &value_from.config_map_key_ref {
-                    if !visitor(&configmap_key_ref.name) {
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-    
-    true
-}
 
-fn visit_volume_source_configmaps(source: &VolumeSource, visitor: &Visitor) -> bool {
-    if let Some(projected) = &source.projected {
-        if let Some(sources) = &projected.sources {
-            for source in sources {
-                if let Some(config_map) = &source.config_map {
-                    if let Some(name) = &config_map.name {
-                        if !visitor(name) {
-                            return false;
-                        }
-                    }
+
+pub fn name(
+    pod: &v1::Pod,
+    pod_claim: &v1::PodResourceClaim,
+) -> Result<(Option<&str>, bool), String> {
+    match {
+        if pod_claim.resource_claim_name.is_some() => {
+            Ok((pod_claim.resource_claim_name.as_deref(), false))
+        }
+        if pod_claim.resource_claim_template_name.is_some() => {
+            for status in &pod.status.resource_claim_statuses {
+                if status.name == pod_claim.name {
+                    return Ok((status.resource_claim_name.as_deref(), true));
                 }
             }
+            Err(format!(
+                r#"pod "{}/{}": {}"#,
+                pod.namespace, pod.name, ERR_CLAIM_NOT_FOUND
+            ))
+        }
+        _ => {
+            Err(format!(
+                r#"pod "{}/{}", spec.resourceClaim "{}": {}"#,
+                pod.namespace, pod.name, pod_claim.name, ERR_API_UNSUPPORTED
+            ))
         }
     }
-    
-    if let Some(config_map) = &source.config_map {
-        if let Some(name) = &config_map.name {
-            if !visitor(name) {
-                return false;
-            }
-        }
-    }
-    
-    true
 }
