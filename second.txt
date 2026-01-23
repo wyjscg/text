@@ -1,25 +1,189 @@
-impl UndirectedGraph {
-    pub fn remove_node(&mut self, n: &dyn Node) {
-        if !self.nodes.contains_key(&n.id()) {
-            return;
+use std::collections::HashMap;
+
+pub trait Node {
+    fn id(&self) -> i64;
+}
+
+pub trait Edge {
+    fn from(&self) -> &dyn Node;
+    fn to(&self) -> &dyn Node;
+}
+
+pub enum EdgeHolderEnum {
+    Slice(SliceEdgeHolder),
+    Map(MapEdgeHolder),
+}
+
+impl EdgeHolderEnum {
+    pub fn visit<F>(&self, visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge),
+    {
+        match self {
+            EdgeHolderEnum::Slice(h) => h.visit(visitor),
+            EdgeHolderEnum::Map(h) => h.visit(visitor),
         }
-        self.nodes.remove(&n.id());
+    }
 
-        let node_id = n.id();
-        if let Some(edge_holder) = self.edges.remove(&node_id) {
-            let mut neighbors_to_update: Vec<i64> = Vec::new();
-            edge_holder.visit(|neighbor, _edge| {
-                neighbors_to_update.push(neighbor);
-            });
+    pub fn delete(self, neighbor: i64) -> EdgeHolderEnum {
+        match self {
+            EdgeHolderEnum::Slice(h) => h.delete(neighbor),
+            EdgeHolderEnum::Map(h) => h.delete(neighbor),
+        }
+    }
 
-            for neighbor in neighbors_to_update {
-                if let Some(neighbor_edges) = self.edges.remove(&neighbor) {
-                    self.edges.insert(neighbor, neighbor_edges.delete(node_id));
+    pub fn set(self, neighbor: i64, edge: Box<dyn Edge>) -> EdgeHolderEnum {
+        match self {
+            EdgeHolderEnum::Slice(h) => h.set(neighbor, edge),
+            EdgeHolderEnum::Map(h) => h.set(neighbor, edge),
+        }
+    }
+
+    pub fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
+        match self {
+            EdgeHolderEnum::Slice(h) => h.get(neighbor),
+            EdgeHolderEnum::Map(h) => h.get(neighbor),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            EdgeHolderEnum::Slice(h) => h.len(),
+            EdgeHolderEnum::Map(h) => h.len(),
+        }
+    }
+}
+
+pub struct SliceEdgeHolder {
+    self_id: i64,
+    edges: Vec<Box<dyn Edge>>,
+}
+
+impl SliceEdgeHolder {
+    pub fn new(self_id: i64) -> Self {
+        SliceEdgeHolder {
+            self_id,
+            edges: Vec::new(),
+        }
+    }
+
+    pub fn visit<F>(&self, mut visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge),
+    {
+        for edge in &self.edges {
+            if edge.from().id() == self.self_id {
+                visitor(edge.to().id(), edge.as_ref());
+            } else {
+                visitor(edge.from().id(), edge.as_ref());
+            }
+        }
+    }
+
+    pub fn delete(mut self, neighbor: i64) -> EdgeHolderEnum {
+        self.edges.retain(|edge| {
+            if edge.from().id() == self.self_id {
+                edge.to().id() != neighbor
+            } else {
+                edge.from().id() != neighbor
+            }
+        });
+        EdgeHolderEnum::Slice(self)
+    }
+
+    pub fn set(mut self, neighbor: i64, new_edge: Box<dyn Edge>) -> EdgeHolderEnum {
+        for edge in &mut self.edges {
+            if edge.from().id() == self.self_id {
+                if edge.to().id() == neighbor {
+                    *edge = new_edge;
+                    return EdgeHolderEnum::Slice(self);
+                }
+            } else {
+                if edge.from().id() == neighbor {
+                    *edge = new_edge;
+                    return EdgeHolderEnum::Slice(self);
                 }
             }
         }
 
-        self.free_ids.insert(node_id);
-        self.used_ids.remove(&node_id);
+        if self.edges.len() < 4 {
+            self.edges.push(new_edge);
+            return EdgeHolderEnum::Slice(self);
+        }
+
+        let mut h: HashMap<i64, Box<dyn Edge>> = HashMap::with_capacity(self.edges.len() + 1);
+        for edge in self.edges {
+            if edge.from().id() == self.self_id {
+                h.insert(edge.to().id(), edge);
+            } else {
+                h.insert(edge.from().id(), edge);
+            }
+        }
+        h.insert(neighbor, new_edge);
+        EdgeHolderEnum::Map(MapEdgeHolder { edges: h })
+    }
+
+    pub fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
+        for edge in &self.edges {
+            if edge.from().id() == self.self_id {
+                if edge.to().id() == neighbor {
+                    return Some(edge.as_ref());
+                }
+            } else {
+                if edge.from().id() == neighbor {
+                    return Some(edge.as_ref());
+                }
+            }
+        }
+        None
+    }
+
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+}
+
+pub struct MapEdgeHolder {
+    edges: HashMap<i64, Box<dyn Edge>>,
+}
+
+impl MapEdgeHolder {
+    pub fn new() -> Self {
+        MapEdgeHolder {
+            edges: HashMap::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        MapEdgeHolder {
+            edges: HashMap::with_capacity(capacity),
+        }
+    }
+
+    pub fn visit<F>(&self, mut visitor: F)
+    where
+        F: FnMut(i64, &dyn Edge),
+    {
+        for (&neighbor, edge) in &self.edges {
+            visitor(neighbor, edge.as_ref());
+        }
+    }
+
+    pub fn delete(mut self, neighbor: i64) -> EdgeHolderEnum {
+        self.edges.remove(&neighbor);
+        EdgeHolderEnum::Map(self)
+    }
+
+    pub fn set(mut self, neighbor: i64, edge: Box<dyn Edge>) -> EdgeHolderEnum {
+        self.edges.insert(neighbor, edge);
+        EdgeHolderEnum::Map(self)
+    }
+
+    pub fn get(&self, neighbor: i64) -> Option<&dyn Edge> {
+        self.edges.get(&neighbor).map(|e| e.as_ref())
+    }
+
+    pub fn len(&self) -> usize {
+        self.edges.len()
     }
 }
