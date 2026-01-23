@@ -1,65 +1,69 @@
-use serde::{Deserialize, Serialize};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1 as metav1;
-use k8s_openapi::apimachinery::pkg::types;
+use std::sync::Mutex;
+use std::time::Instant;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PodCertificateRequest {
-    #[serde(flatten)]
-    pub type_meta: metav1::TypeMeta,
+impl Graph {
+    pub fn add_pod_certificate_request(&self, pcr: &certsv1beta1::PodCertificateRequest) {
+        let start = Instant::now();
+        
+        let _guard = self.record_action_duration("AddPodCertificateRequest", start);
+        
+        let mut graph = self.lock.lock().unwrap();
+        
+        graph.delete_vertex_locked(
+            VertexType::PodCertificateRequest,
+            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
+            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
+        );
+        
+        let pcr_vertex = graph.get_or_create_vertex_locked(
+            VertexType::PodCertificateRequest,
+            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
+            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
+        );
+        
+        let node_vertex = graph.get_or_create_vertex_locked(
+            VertexType::Node,
+            "",
+            &pcr.spec.as_ref()
+                .map(|s| s.node_name.clone())
+                .unwrap_or_default(),
+        );
+        
+        graph.add_edge_locked(&pcr_vertex, &node_vertex, &node_vertex);
+    }
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<metav1::ObjectMeta>,
-
-    pub spec: PodCertificateRequestSpec,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<PodCertificateRequestStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PodCertificateRequestSpec {
-    pub signer_name: String,
-
-    pub pod_name: String,
-
-    pub pod_uid: types::UID,
-
-    pub service_account_name: String,
-
-    pub service_account_uid: types::UID,
-
-    pub node_name: types::NodeName,
-
-    pub node_uid: types::UID,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_expiration_seconds: Option<i32>,
-
-    pub pkix_public_key: Vec<u8>,
-
-    pub proof_of_possession: Vec<u8>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unverified_user_annotations: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PodCertificateRequestStatus {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conditions: Option<Vec<metav1::Condition>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate_chain: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_before: Option<metav1::Time>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub begin_refresh_at: Option<metav1::Time>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_after: Option<metav1::Time>,
+    pub fn delete_pod_certificate_request(&self, pcr: &certsv1beta1::PodCertificateRequest) {
+        let start = Instant::now();
+        
+        let _guard = self.record_action_duration("DeletePodCertificateRequest", start);
+        
+        let mut graph = self.lock.lock().unwrap();
+        
+        graph.delete_vertex_locked(
+            VertexType::PodCertificateRequest,
+            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
+            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
+        );
+    }
+    
+    fn record_action_duration(&self, action: &str, start: Instant) -> impl Drop {
+        struct Guard {
+            action: String,
+            start: Instant,
+        }
+        
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let duration = self.start.elapsed().as_secs_f64();
+                GRAPH_ACTIONS_DURATION
+                    .with_label_values(&[&self.action])
+                    .observe(duration);
+            }
+        }
+        
+        Guard {
+            action: action.to_string(),
+            start,
+        }
+    }
 }
