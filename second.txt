@@ -1,69 +1,25 @@
-use std::sync::Mutex;
-use std::time::Instant;
-
-impl Graph {
-    pub fn add_pod_certificate_request(&self, pcr: &certsv1beta1::PodCertificateRequest) {
-        let start = Instant::now();
-        
-        let _guard = self.record_action_duration("AddPodCertificateRequest", start);
-        
-        let mut graph = self.lock.lock().unwrap();
-        
-        graph.delete_vertex_locked(
-            VertexType::PodCertificateRequest,
-            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
-            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
-        );
-        
-        let pcr_vertex = graph.get_or_create_vertex_locked(
-            VertexType::PodCertificateRequest,
-            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
-            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
-        );
-        
-        let node_vertex = graph.get_or_create_vertex_locked(
-            VertexType::Node,
-            "",
-            &pcr.spec.as_ref()
-                .map(|s| s.node_name.clone())
-                .unwrap_or_default(),
-        );
-        
-        graph.add_edge_locked(&pcr_vertex, &node_vertex, &node_vertex);
-    }
-
-    pub fn delete_pod_certificate_request(&self, pcr: &certsv1beta1::PodCertificateRequest) {
-        let start = Instant::now();
-        
-        let _guard = self.record_action_duration("DeletePodCertificateRequest", start);
-        
-        let mut graph = self.lock.lock().unwrap();
-        
-        graph.delete_vertex_locked(
-            VertexType::PodCertificateRequest,
-            &pcr.metadata.as_ref().map(|m| m.namespace.clone()).unwrap_or_default(),
-            &pcr.metadata.as_ref().map(|m| m.name.clone()).unwrap_or_default(),
-        );
-    }
-    
-    fn record_action_duration(&self, action: &str, start: Instant) -> impl Drop {
-        struct Guard {
-            action: String,
-            start: Instant,
+impl UndirectedGraph {
+    pub fn remove_node(&mut self, n: &dyn Node) {
+        if !self.nodes.contains_key(&n.id()) {
+            return;
         }
-        
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                let duration = self.start.elapsed().as_secs_f64();
-                GRAPH_ACTIONS_DURATION
-                    .with_label_values(&[&self.action])
-                    .observe(duration);
+        self.nodes.remove(&n.id());
+
+        let node_id = n.id();
+        if let Some(edge_holder) = self.edges.remove(&node_id) {
+            let mut neighbors_to_update: Vec<i64> = Vec::new();
+            edge_holder.visit(|neighbor, _edge| {
+                neighbors_to_update.push(neighbor);
+            });
+
+            for neighbor in neighbors_to_update {
+                if let Some(neighbor_edges) = self.edges.remove(&neighbor) {
+                    self.edges.insert(neighbor, neighbor_edges.delete(node_id));
+                }
             }
         }
-        
-        Guard {
-            action: action.to_string(),
-            start,
-        }
+
+        self.free_ids.insert(node_id);
+        self.used_ids.remove(&node_id);
     }
 }
